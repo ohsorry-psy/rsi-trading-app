@@ -30,7 +30,6 @@ if close.empty:
 
 # ✅ RSI 계산
 try:
-      close = data['Close'].squeeze()
     data['RSI'] = ta.momentum.RSIIndicator(close=close, window=14).rsi()
     if data['RSI'].isnull().all():
         st.error("❌ RSI 계산 결과가 모두 결측치입니다.")
@@ -107,4 +106,3 @@ fig.update_layout(
 )
 
 st.plotly_chart(fig, use_container_width=True)
-
