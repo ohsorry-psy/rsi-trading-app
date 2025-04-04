@@ -1,33 +1,53 @@
-
 import streamlit as st
-import pandas as pd
 import yfinance as yf
+import pandas as pd
 import ta
 import plotly.graph_objs as go
-from datetime import datetime
 
+# ----------------------
+# 화면 설정
+# ----------------------
 st.set_page_config(page_title="RSI 다이버전스 정신과 트레이딩", layout="wide")
 st.title("🧠 RSI 다이버전스 정신과 트레이딩")
 
-# 📌 Sidebar: 종목, 기간 선택
-ticker = st.sidebar.text_input("종목 코드 (예: 005930.KS, AAPL, PLTR)", value="005930.KS")
-start_date = st.sidebar.date_input("시작일", value=datetime(2023, 1, 1))
-end_date = st.sidebar.date_input("종료일", value=datetime.today())
+# ----------------------
+# 자발된 값 선택
+# ----------------------
+symbol = st.sidebar.text_input("특정 종목 코드 (예: AAPL, 005930.KS, 012450.KQ)", value="AAPL")
+start_date = st.sidebar.date_input("건조 시작일", pd.to_datetime("2023-01-01"))
+end_date = st.sidebar.date_input("건조 종료일", pd.to_datetime("today"))
 
-# 📌 데이터 다운로드
-data = yf.download(ticker, start=start_date, end=end_date)
+# ----------------------
+# 데이터 보기
+# ----------------------
+data = yf.download(symbol, start=start_date, end=end_date)
+
 if data.empty:
-    st.error("데이터를 불러오지 못했습니다. 종목 코드를 확인해주세요.")
+    st.error("건조한 값이 없습니다. 종목 코드를 확인해주세요.")
     st.stop()
 
-data['RSI'] = ta.momentum.RSIIndicator(close=data['Close'], window=14).rsi()
+# ----------------------
+# RSI 계산
+# ----------------------
+if 'Close' not in data.columns or data['Close'].empty:
+    st.error("❌ 'Close' 데이터가 비어 있습니다.")
+    st.stop()
 
-# 📌 일목균형표 추가
-ichimoku = ta.trend.IchimokuIndicator(high=data['High'], low=data['Low'])
-data["tenkan"] = ichimoku.ichimoku_conversion_line()
-data["kijun"] = ichimoku.ichimoku_base_line()
+close = data['Close']
+if close.ndim > 1:
+    close = close.squeeze()
 
-# 📌 다이버전스 찾기
+try:
+    rsi = ta.momentum.RSIIndicator(close=close, window=14).rsi().squeeze()
+    data['RSI'] = rsi
+    data = data.dropna(subset=['RSI'])
+except Exception as e:
+    st.error(f"RSI 계산 중 오류 발생: {e}")
+    st.stop()
+
+# ----------------------
+# 다이버전스 패턴 필터
+# ----------------------
 def find_bullish_divergence(df):
     points = []
     for i in range(30, len(df)):
@@ -53,48 +73,64 @@ def find_bearish_divergence(df):
 bullish_points = find_bullish_divergence(data)
 bearish_points = find_bearish_divergence(data)
 
-# 📊 Plotly 시각화
-fig = go.Figure()
-
-# 캔들 차트 or 선 차트
-fig.add_trace(go.Scatter(x=data.index, y=data["Close"], name="종가", line=dict(color="blue")))
-
-# 매수 시점 표시
-fig.add_trace(go.Scatter(
-    x=data.index[bullish_points],
+# ----------------------
+# 차트 구조 (Plotly)
+# ----------------------
+price_trace = go.Scatter(
+    x=data.index, y=data['Close'], mode='lines', name='Close Price', line=dict(color='blue')
+)
+bullish_trace = go.Scatter(
+    x=data.iloc[bullish_points].index,
     y=data['Close'].iloc[bullish_points],
     mode='markers',
-    name='🟢 매수 다이버전스',
-    marker=dict(color='green', size=10),
-    hovertext=[f"RSI: {round(data['RSI'].iloc[i], 2)}<br>Price: {round(data['Close'].iloc[i], 2)}" for i in bullish_points]
-))
-
-# 매도 시점 표시
-fig.add_trace(go.Scatter(
-    x=data.index[bearish_points],
+    marker=dict(color='green', size=10, symbol='triangle-up'),
+    name='🟢 Bullish Divergence',
+    hovertext=[
+        f"RSI: {data['RSI'].iloc[i]:.2f}<br>Price: {data['Close'].iloc[i]:.2f}"
+        for i in bullish_points
+    ],
+    hoverinfo="text"
+)
+bearish_trace = go.Scatter(
+    x=data.iloc[bearish_points].index,
     y=data['Close'].iloc[bearish_points],
     mode='markers',
-    name='🔴 매도 다이버전스',
-    marker=dict(color='red', size=10),
-    hovertext=[f"RSI: {round(data['RSI'].iloc[i], 2)}<br>Price: {round(data['Close'].iloc[i], 2)}" for i in bearish_points]
-))
+    marker=dict(color='red', size=10, symbol='triangle-down'),
+    name='🔴 Bearish Divergence',
+    hovertext=[
+        f"RSI: {data['RSI'].iloc[i]:.2f}<br>Price: {data['Close'].iloc[i]:.2f}"
+        for i in bearish_points
+    ],
+    hoverinfo="text"
+)
+rsi_trace = go.Scatter(
+    x=data.index, y=data['RSI'], mode='lines', name='RSI', line=dict(color='purple')
+)
+line_30 = go.Scatter(x=data.index, y=[30]*len(data), mode='lines', name='30', line=dict(dash='dot', color='gray'))
+line_70 = go.Scatter(x=data.index, y=[70]*len(data), mode='lines', name='70', line=dict(dash='dot', color='gray'))
 
-# 일목균형표 라인
-fig.add_trace(go.Scatter(x=data.index, y=data['tenkan'], name='일목 전환선', line=dict(color='orange', dash='dot')))
-fig.add_trace(go.Scatter(x=data.index, y=data['kijun'], name='일목 기준선', line=dict(color='purple', dash='dot')))
-
-# RSI Subplot
-rsi_trace = go.Scatter(x=data.index, y=data["RSI"], name="RSI", line=dict(color="purple"), yaxis="y2")
-
-# Layout 설정
-fig.add_trace(rsi_trace)
+fig = go.Figure()
+fig.add_trace(price_trace)
+fig.add_trace(bullish_trace)
+fig.add_trace(bearish_trace)
 fig.update_layout(
-    xaxis=dict(domain=[0, 1]),
-    yaxis=dict(title="가격", side="left"),
-    yaxis2=dict(title="RSI", overlaying="y", side="right", range=[0, 100]),
-    height=700,
-    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-    margin=dict(l=20, r=20, t=40, b=40)
+    title=f"{symbol} 가격차트",
+    height=500,
+    margin=dict(t=30, b=10)
 )
 
+fig_rsi = go.Figure()
+fig_rsi.add_trace(rsi_trace)
+fig_rsi.add_trace(line_30)
+fig_rsi.add_trace(line_70)
+fig_rsi.update_layout(
+    title="RSI Indicator",
+    height=300,
+    margin=dict(t=10)
+)
+
+# ----------------------
+# 보이기
+# ----------------------
 st.plotly_chart(fig, use_container_width=True)
+st.plotly_chart(fig_rsi, use_container_width=True)
